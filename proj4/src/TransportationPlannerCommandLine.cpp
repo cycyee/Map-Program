@@ -2,338 +2,249 @@
 #include <sstream>
 #include <iostream>
 #include <memory>
-#include <unordered_map>
+#include <vector>
+#include <string>
 #include <iomanip>
-#include "StringDataSource.h"
 #include "GeographicUtils.h"
-#include "StringUtils.h"
 
-// Helper function for formatting latitude and longitude into a human-readable string
-std::string formatLatLon(double lat, double lon) {
-    std::ostringstream stream;
-    stream << std::fixed << std::setprecision(2);
-    stream << lat << ", " << lon;
-    return stream.str();
-}
-
-struct CTransportationPlannerCommandLine::SImplementation{
+struct CTransportationPlannerCommandLine::SImplementation {
     std::shared_ptr<CDataSource> CmdSrc;
-    
     std::shared_ptr<CDataSink> OutSink;
     std::shared_ptr<CDataSink> ErrSink;
     std::shared_ptr<CDataFactory> Results;
     std::shared_ptr<CTransportationPlanner> Planner;
 
-    // Last computed path, retained so "save" and "print" can act on it
+    // The last calculated path, retained so "save" and "print" can act on it.
     enum class ELastPath { None, Shortest, Fastest };
     ELastPath DLastType = ELastPath::None;
+    CTransportationPlanner::TNodeID DLastSrc = 0;
+    CTransportationPlanner::TNodeID DLastDest = 0;
+    double DLastMetric = 0.0; // miles for shortest, hours for fastest
     std::vector<CTransportationPlanner::TNodeID> DLastShortestPath;
     std::vector<CTransportationPlanner::TTripStep> DLastFastestPath;
 
-    //assign to defined corresponding variable
-    SImplementation(std::shared_ptr<CDataSource> cmdsrc, std::shared_ptr<CDataSink> outsink, std::shared_ptr<CDataSink> errsink, std::shared_ptr<CDataFactory> results, std::shared_ptr<CTransportationPlanner> planner)
-    : CmdSrc(std::move(cmdsrc)), OutSink(std::move(outsink)), ErrSink(std::move(errsink)), Results(std::move(results)), Planner(std::move(planner)) {
+    SImplementation(std::shared_ptr<CDataSource> cmdsrc, std::shared_ptr<CDataSink> outsink,
+                    std::shared_ptr<CDataSink> errsink, std::shared_ptr<CDataFactory> results,
+                    std::shared_ptr<CTransportationPlanner> planner)
+        : CmdSrc(std::move(cmdsrc)), OutSink(std::move(outsink)), ErrSink(std::move(errsink)),
+          Results(std::move(results)), Planner(std::move(planner)) {}
+
+    void Write(const std::shared_ptr<CDataSink> &sink, const std::string &str) {
+        std::vector<char> buf(str.begin(), str.end());
+        sink->Write(buf);
     }
 
-    // Build a human-readable description of the last calculated path.
-    // Prefers the planner's turn-by-turn description; falls back to a step list.
-    std::string BuildPathText() {
-        std::ostringstream oss;
-        if (DLastType == ELastPath::Shortest) {
-            oss << "Shortest path (" << DLastShortestPath.size() << " nodes):\n";
-            for (auto id : DLastShortestPath) {
-                oss << "  node " << id << "\n";
-            }
-        }
-        else if (DLastType == ELastPath::Fastest) {
-            std::vector<std::string> desc;
-            if (Planner->GetPathDescription(DLastFastestPath, desc) && !desc.empty()) {
-                oss << "Fastest path:\n";
-                for (const auto &d : desc) {
-                    oss << "  " << d << "\n";
-                }
-            }
-            else {
-                oss << "Fastest path (" << DLastFastestPath.size() << " steps):\n";
-                for (const auto &step : DLastFastestPath) {
-                    const char *mode = "Walk";
-                    if (step.first == CTransportationPlanner::ETransportationMode::Bike) mode = "Bike";
-                    else if (step.first == CTransportationPlanner::ETransportationMode::Bus) mode = "Bus";
-                    oss << "  " << mode << " to node " << step.second << "\n";
-                }
-            }
-        }
-        return oss.str();
-    }
-
-    //assign sources
-    bool ProcessCommands() {
-        //char vectors to be applied to write()
-        std::vector<char> outsinkV;
-        std::vector<char> errsinkV;
+    // Read one line (up to '\n') from the command source. Returns false only on a
+    // clean end-of-input with nothing read, which ends the command loop.
+    bool ReadLine(std::string &line) {
+        line.clear();
         char ch;
-        std::string line;
-        while(CmdSrc->Get(ch)) {//iterate through characters
-            if (ch == '\n') { line = ""; continue; }//newline separates commands; don't let it bleed into the next
+        bool any = false;
+        while (CmdSrc->Get(ch)) {
+            any = true;
+            if (ch == '\n') return true;
             line += ch;
-            if (line == "help") {
-                std::string str ="> "
-                                "------------------------------------------------------------------------\n"
-                               "help     Display this help menu\n"
-                               "exit     Exit the program\n"
-                               "count    Output the number of nodes in the map\n"
-                               "node     Syntax \"node [0, count)\" \n"
-                               "         Will output node ID and Lat/Lon for node\n"
-                               "fastest  Syntax \"fastest start end\" \n"
-                               "         Calculates the time for fastest path from start to end\n"
-                               "shortest Syntax \"shortest start end\" \n"
-                               "         Calculates the distance for the shortest path from start to end\n"
-                               "save     Saves the last calculated path to file\n"
-                               "print    Prints the steps for the last calculated path\n"
-                               "> ";             
-                for(size_t i = 0; i < str.length(); i++) {//fill vector
-                    outsinkV.push_back(str[i]);
-                }
-                OutSink->Write(outsinkV);//write
-                outsinkV.clear();//always clear vector after command is processed
-                line = "";
-            }
-            if (line == "exit") {//exit is the only return true path
-                outsinkV.push_back('>');
-                outsinkV.push_back(' ');
-                OutSink->Write(outsinkV);
-                outsinkV.clear();
-                return true;
-            }
-            if (line == "count") {//get nodecount from planner
-                auto nodeCount = Planner->NodeCount();
-                std::string str = "> "+ std::to_string(nodeCount) + " nodes\n" "> ";
-                for (size_t i = 0; i < str.length(); i++) {
-                    outsinkV.push_back(str[i]);
-                }
-                OutSink->Write(outsinkV);
-                outsinkV.clear();//clear vect
-                line = "";//reset so the next command parses cleanly
-            }
-            if (line == "node") {
-                std::string nodeid;
-                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//get remaining chars after "node" to see id
-                    nodeid += ch;
-                }
-                if (nodeid == "") {//empty id
-                    std::string str = "Invalid node command, see help.\n";
-                    for(size_t i = 0; i< str.size(); i++) {
-                        errsinkV.push_back(str[i]);
-                    }
-                    ErrSink->Write(errsinkV);
-                    errsinkV.clear();
-                    line = "";//reassign line and clear vects
-                }
-                else {
-                    int IntNodeID;
-                    try {
-                        // Try converting the string to an integer
-                        IntNodeID = std::stoi(nodeid);//get node index into int
-                        auto node = Planner->SortedNodeByIndex(IntNodeID);//get node to get nodeid
-                        std::string output = "> " "Node " + std::to_string(IntNodeID) + ": id = " + std::to_string(node->ID()) +
-                                " is at " + SGeographicUtils::ConvertLLToDMS(node->Location()) + "\n> ";
-                        for (size_t i = 0; i < output.size(); i++) {
-                            outsinkV.push_back(output[i]);
-                        }
-                        OutSink->Write(outsinkV);//write, reassign  line, clear vect
-                        outsinkV.clear();
-                        line = "";
-                    } 
-                    catch (const std::invalid_argument&) {
-                        // Conversion failed due to invalid argument
-                        std::string err = "Invalid node index.\n";
-                        for (size_t i = 0; i < err.size(); i++) {
-                            errsinkV.push_back(err[i]);
-                        }
-                        ErrSink->Write(errsinkV);
-                        errsinkV.clear();
-                        line = "";
-                        return false;
-                    } 
-                    catch (const std::out_of_range&) {
-                        // Conversion failed due to out of range
-                        std::string err = "Invalid node index.\n";
-                        for (size_t i = 0; i < err.size(); i++) {
-                            errsinkV.push_back(err[i]);
-                        }
-                        ErrSink->Write(errsinkV);
-                        errsinkV.clear();
-                        line = "";
-                        return false;
-                    }
-                } 
-            }
+        }
+        return any;
+    }
 
-            if (line == "fastest") {//get src dest ids in a big string
-                std::string fastids;
-                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//remainder of characters after "fastest"
-                    fastids += ch;
-                }
-                if(fastids == "") {
-                    //std::cout<<"shortids was empty"<<std::endl;  testing line
-                    std::string str = "Invalid shortest command, see help.\n";
-                    for(size_t i = 0; i< str.size(); i++) {
-                        errsinkV.push_back(str[i]);
-                    }
-                    ErrSink->Write(errsinkV);//write error message
-                    errsinkV.clear();
-                    line = "";
-                    return false;
-                }
-                std::vector<std::string> idvect = StringUtils::Split(fastids);//split to separate ids
-                std::string Fnodeid1 = idvect[1];//a space being passed to split as the first char means idvect[0] is empty
-                std::string Fnodeid2 = idvect[2];
-                //std::cout<<"fnode 1: "<<Fnodeid1<<"fnode 2: "<<Fnodeid2<<std::endl;
+    static std::vector<std::string> Tokenize(const std::string &line) {
+        std::vector<std::string> tokens;
+        std::istringstream iss(line);
+        std::string tok;
+        while (iss >> tok) tokens.push_back(tok);
+        return tokens;
+    }
 
-                try{
-                    std::vector <CTransportationPlanner::TTripStep> path;
-                    int IntNodeID1 = std::stoull(Fnodeid1);//stoull on nodeids
-                    int IntNodeID2 = std::stoull(Fnodeid2);
-                    double Time = Planner->FindFastestPath(IntNodeID1, IntNodeID2, path);//get time in hrs as double type
-                    DLastFastestPath = path;//store for save/print
-                    DLastType = ELastPath::Fastest;
-                    int hours = static_cast<int>(Time);//truncate for hours
-                    double remainder = Time - hours;//get remainder as fraction
-                    remainder *= 60;//convert minutes
-                    int minutes = static_cast<int>(remainder);//truncate minutes
-                    remainder = (remainder - minutes)*60;
-                    int seconds = static_cast<int>(remainder);//get seconds
-                    std::string str = "> Fastest path takes";
-                    if(hours > 0){
-                        str += " " + std::to_string(hours) + " hr";//write values in format
-                    }
-                    if(minutes > 0) {
-                        str += " " + std::to_string(minutes) + " min";
-                    }
-                    if(seconds > 0) {
-                        str += " " + std::to_string(seconds) + " sec";
-                    }
-                    str += ".\n> ";
-                    for(size_t i = 0; i< str.size(); i++) {
-                        outsinkV.push_back(str[i]);
-                    }
-                    OutSink->Write(outsinkV);
-                    outsinkV.clear();
-                    line = "";//reset so the next command parses cleanly
-                }
-                catch(const std::invalid_argument&) {//if something other than ids are passed
-                    std::string err = "Invalid shortest parameter, see help.\n";
-                    for(size_t i = 0; i< err.size(); i++) {
-                        errsinkV.push_back(err[i]);
-                    }
-                    ErrSink->Write(errsinkV);
-                    errsinkV.clear();
-                    line = "";
-                    return false;
-                }
-            }
+    static std::string HelpText() {
+        return "------------------------------------------------------------------------\n"
+               "help     Display this help menu\n"
+               "exit     Exit the program\n"
+               "count    Output the number of nodes in the map\n"
+               "node     Syntax \"node [0, count)\" \n"
+               "         Will output node ID and Lat/Lon for node\n"
+               "fastest  Syntax \"fastest start end\" \n"
+               "         Calculates the time for fastest path from start to end\n"
+               "shortest Syntax \"shortest start end\" \n"
+               "         Calculates the distance for the shortest path from start to end\n"
+               "save     Saves the last calculated path to file\n"
+               "print    Prints the steps for the last calculated path\n";
+    }
 
-            if (line == "shortest") {//shortest distance
-                std::string shortids;
-                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//remainder of str is the ids
-                    shortids += ch;
-                }
-                if (shortids == "") {
-                    //std::cout<<"shortids was empty"<<std::endl;
-                    std::string str = "Invalid shortest command, see help.\n";
-                    for(size_t i = 0; i< str.size(); i++) {
-                        errsinkV.push_back(str[i]);
-                    }
-                    ErrSink->Write(errsinkV);
-                    errsinkV.clear();
-                    line = "";
-                    return false;
-                }
-                std::vector<std::string> idvect = StringUtils::Split(shortids);//split up ids
-                std::string nodeid1 = idvect[1];//same as before, there is a space passed in
-                std::string nodeid2 = idvect[2];
-                //std::cout<<"node 1: "<<nodeid1<<"node 2: "<<nodeid2<<std::endl;
-                try{
-                    std::vector <CTransportationPlanner::TNodeID> path;
-                    int IntNodeID1 = std::stoull(nodeid1);
-                    int IntNodeID2 = std::stoull(nodeid2);
-                    double distance = Planner->FindShortestPath(IntNodeID1, IntNodeID2, path); //find distance
-                    std::stringstream ss;
-                    ss << std::fixed << std::setprecision(1) << distance;//truncate
-                    std::string dist = ss.str();
-                    DLastShortestPath = path;//store for save/print
-                    DLastType = ELastPath::Shortest;
-                    std::string str = "> Shortest path is " + dist + " mi.\n> ";
-                    for(size_t i = 0; i< str.size(); i++) {
-                        outsinkV.push_back(str[i]);
-                    }
-                    OutSink->Write(outsinkV);
-                    outsinkV.clear();
-                    line = "";
-                }
-                catch(const std::invalid_argument&) {
-                    std::string err = "Invalid shortest parameter, see help.\n";
-                    for(size_t i = 0; i< err.size(); i++) {
-                        errsinkV.push_back(err[i]);
-                    }
-                    ErrSink->Write(errsinkV);//write error 
-                    errsinkV.clear();
-                    return false;
-                }
+    // Format a duration in hours as "H hr M min S sec", omitting zero components.
+    static std::string FormatTime(double hoursValue) {
+        int hours = static_cast<int>(hoursValue);
+        double remainder = (hoursValue - hours) * 60.0;
+        int minutes = static_cast<int>(remainder);
+        remainder = (remainder - minutes) * 60.0;
+        int seconds = static_cast<int>(remainder);
+        std::string out;
+        if (hours > 0) out += " " + std::to_string(hours) + " hr";
+        if (minutes > 0) out += " " + std::to_string(minutes) + " min";
+        if (seconds > 0) out += " " + std::to_string(seconds) + " sec";
+        if (out.empty()) out = " 0 sec";
+        return out.substr(1);
+    }
+
+    static const char *ModeString(CTransportationPlanner::ETransportationMode mode) {
+        switch (mode) {
+            case CTransportationPlanner::ETransportationMode::Bike: return "Bike";
+            case CTransportationPlanner::ETransportationMode::Bus:  return "Bus";
+            default:                                                return "Walk";
+        }
+    }
+
+    void HandleNode(const std::vector<std::string> &tokens) {
+        if (tokens.size() < 2) {
+            Write(ErrSink, "Invalid node command, see help.\n");
+            return;
+        }
+        try {
+            int index = std::stoi(tokens[1]);
+            auto node = Planner->SortedNodeByIndex(index);
+            if (!node) {
+                Write(ErrSink, "Invalid node parameter, see help.\n");
+                return;
             }
-            if (line == "save") {
-                if (DLastType == ELastPath::None) {
-                    std::string err = "No path calculated yet, see help.\n";
-                    for (char c : err) errsinkV.push_back(c);
-                    ErrSink->Write(errsinkV);
-                    errsinkV.clear();
-                    line = "";
-                }
-                else {
-                    std::string out = BuildPathText();
-                    auto sink = Results ? Results->CreateSink("path.txt") : nullptr;
-                    if (sink) {
-                        std::vector<char> fileV(out.begin(), out.end());
-                        sink->Write(fileV);
-                    }
-                    std::string msg = "> Path saved to path.txt\n> ";
-                    for (char c : msg) outsinkV.push_back(c);
-                    OutSink->Write(outsinkV);
-                    outsinkV.clear();
-                    line = "";
-                }
+            Write(OutSink, "Node " + std::to_string(index) + ": id = " + std::to_string(node->ID()) +
+                           " is at " + SGeographicUtils::ConvertLLToDMS(node->Location()) + "\n");
+        } catch (...) {
+            Write(ErrSink, "Invalid node parameter, see help.\n");
+        }
+    }
+
+    void HandleShortest(const std::vector<std::string> &tokens) {
+        if (tokens.size() < 3) {
+            Write(ErrSink, "Invalid shortest command, see help.\n");
+            return;
+        }
+        try {
+            auto src = static_cast<CTransportationPlanner::TNodeID>(std::stoull(tokens[1]));
+            auto dest = static_cast<CTransportationPlanner::TNodeID>(std::stoull(tokens[2]));
+            std::vector<CTransportationPlanner::TNodeID> path;
+            double distance = Planner->FindShortestPath(src, dest, path);
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(1) << distance;
+            Write(OutSink, "Shortest path is " + oss.str() + " mi.\n");
+            DLastType = ELastPath::Shortest;
+            DLastSrc = src;
+            DLastDest = dest;
+            DLastMetric = distance;
+            DLastShortestPath = path;
+        } catch (...) {
+            Write(ErrSink, "Invalid shortest parameter, see help.\n");
+        }
+    }
+
+    void HandleFastest(const std::vector<std::string> &tokens) {
+        if (tokens.size() < 3) {
+            Write(ErrSink, "Invalid fastest command, see help.\n");
+            return;
+        }
+        try {
+            auto src = static_cast<CTransportationPlanner::TNodeID>(std::stoull(tokens[1]));
+            auto dest = static_cast<CTransportationPlanner::TNodeID>(std::stoull(tokens[2]));
+            std::vector<CTransportationPlanner::TTripStep> steps;
+            double time = Planner->FindFastestPath(src, dest, steps);
+            Write(OutSink, "Fastest path takes " + FormatTime(time) + ".\n");
+            DLastType = ELastPath::Fastest;
+            DLastSrc = src;
+            DLastDest = dest;
+            DLastMetric = time;
+            DLastFastestPath = steps;
+        } catch (...) {
+            Write(ErrSink, "Invalid fastest parameter, see help.\n");
+        }
+    }
+
+    void HandlePrint() {
+        if (DLastType == ELastPath::None) {
+            Write(ErrSink, "No valid path to print, see help.\n");
+            return;
+        }
+        if (DLastType == ELastPath::Fastest) {
+            std::vector<std::string> desc;
+            Planner->GetPathDescription(DLastFastestPath, desc);
+            std::string out;
+            for (const auto &line : desc) out += line + "\n";
+            Write(OutSink, out);
+        } else {
+            std::string out;
+            for (auto id : DLastShortestPath) out += "node " + std::to_string(id) + "\n";
+            Write(OutSink, out);
+        }
+    }
+
+    void HandleSave() {
+        if (DLastType == ELastPath::None) {
+            Write(ErrSink, "No valid path to save, see help.\n");
+            return;
+        }
+        std::ostringstream fn;
+        fn << DLastSrc << "_" << DLastDest << "_" << std::fixed << std::setprecision(6)
+           << DLastMetric << "hr.csv";
+        std::string filename = fn.str();
+
+        std::string body = "mode,node_id";
+        if (DLastType == ELastPath::Fastest) {
+            for (const auto &step : DLastFastestPath) {
+                body += "\n" + std::string(ModeString(step.first)) + "," + std::to_string(step.second);
             }
-            if (line == "print") {
-                if (DLastType == ELastPath::None) {
-                    std::string err = "No path calculated yet, see help.\n";
-                    for (char c : err) errsinkV.push_back(c);
-                    ErrSink->Write(errsinkV);
-                    errsinkV.clear();
-                    line = "";
-                }
-                else {
-                    std::string out = "> " + BuildPathText() + "> ";
-                    for (char c : out) outsinkV.push_back(c);
-                    OutSink->Write(outsinkV);
-                    outsinkV.clear();
-                    line = "";
-                }
+        } else {
+            for (auto id : DLastShortestPath) {
+                body += "\nWalk," + std::to_string(id);
             }
         }
-        return true;
-    }            
+
+        if (Results) {
+            auto sink = Results->CreateSink(filename);
+            if (sink) Write(sink, body);
+        }
+        Write(OutSink, "Path saved to <results>/" + filename + "\n");
+    }
+
+    bool ProcessCommands() {
+        while (true) {
+            Write(OutSink, "> ");
+            std::string line;
+            if (!ReadLine(line)) return true; // end of input
+
+            auto tokens = Tokenize(line);
+            if (tokens.empty()) continue;
+            const std::string &cmd = tokens[0];
+
+            if (cmd == "exit") {
+                return true;
+            } else if (cmd == "help") {
+                Write(OutSink, HelpText());
+            } else if (cmd == "count") {
+                Write(OutSink, std::to_string(Planner->NodeCount()) + " nodes\n");
+            } else if (cmd == "node") {
+                HandleNode(tokens);
+            } else if (cmd == "shortest") {
+                HandleShortest(tokens);
+            } else if (cmd == "fastest") {
+                HandleFastest(tokens);
+            } else if (cmd == "print") {
+                HandlePrint();
+            } else if (cmd == "save") {
+                HandleSave();
+            } else {
+                Write(ErrSink, "Unknown command \"" + cmd + "\" type help for help.\n");
+            }
+        }
+    }
 };
 
-//constructor
-CTransportationPlannerCommandLine::CTransportationPlannerCommandLine(std::shared_ptr<CDataSource> cmdsrc, std::shared_ptr<CDataSink> outsink, std::shared_ptr<CDataSink> errsink, std::shared_ptr<CDataFactory> results, std::shared_ptr<CTransportationPlanner> planner){
+CTransportationPlannerCommandLine::CTransportationPlannerCommandLine(std::shared_ptr<CDataSource> cmdsrc,
+    std::shared_ptr<CDataSink> outsink, std::shared_ptr<CDataSink> errsink,
+    std::shared_ptr<CDataFactory> results, std::shared_ptr<CTransportationPlanner> planner) {
     DImplementation = std::make_unique<SImplementation>(cmdsrc, outsink, errsink, results, planner);
 }
 
-//destructor
-CTransportationPlannerCommandLine::~CTransportationPlannerCommandLine(){
+CTransportationPlannerCommandLine::~CTransportationPlannerCommandLine() {
 }
 
-//function processcommands
-bool CTransportationPlannerCommandLine::ProcessCommands(){
+bool CTransportationPlannerCommandLine::ProcessCommands() {
     return DImplementation->ProcessCommands();
 }

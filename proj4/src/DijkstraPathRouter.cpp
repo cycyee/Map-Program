@@ -59,7 +59,13 @@ struct CDijkstraPathRouter::SImplementation {
         // previous O(V^2) make-heap-per-iteration, and avoids the inconsistent
         // heap ordering that could produce cyclic Previous pointers.
         using SQueueEntry = std::pair<double, TVertexID>;
-        std::priority_queue<SQueueEntry, std::vector<SQueueEntry>, std::greater<SQueueEntry>> Queue;
+        // Min-heap by distance; on equal distances prefer the higher vertex id,
+        // which keeps tie-breaking deterministic and consistent with the tests.
+        auto Cmp = [](const SQueueEntry &a, const SQueueEntry &b) {
+            if(a.first != b.first) return a.first > b.first;
+            return a.second < b.second;
+        };
+        std::priority_queue<SQueueEntry, std::vector<SQueueEntry>, decltype(Cmp)> Queue(Cmp);
 
         Distances[src] = 0.0;
         Queue.push({0.0, src});
