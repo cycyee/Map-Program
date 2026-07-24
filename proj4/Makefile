@@ -10,7 +10,26 @@ CXXFLAGS = -std=c++17 -I $(INC_DIR) -g
 LDFLAGS = -pthread -lexpat -lgmock -lgtest -lgtest_main
 MAKEFLAGS += --warn-undefined-variables
 
-all: directories runtests
+all: directories runtests transplanner
+
+# Interactive CLI planner. Links without gtest (it provides its own main()).
+APPLDFLAGS = -pthread -lexpat
+
+TRANSPLANNER_OBJS = $(OBJ_DIR)/transplanner.o $(OBJ_DIR)/TransportationPlannerCommandLine.o \
+	$(OBJ_DIR)/DijkstraTransportationPlanner.o $(OBJ_DIR)/DijkstraPathRouter.o \
+	$(OBJ_DIR)/BusSystemIndexer.o $(OBJ_DIR)/OpenStreetMap.o $(OBJ_DIR)/CSVBusSystem.o \
+	$(OBJ_DIR)/XMLReader.o $(OBJ_DIR)/DSVReader.o $(OBJ_DIR)/GeographicUtils.o \
+	$(OBJ_DIR)/StringUtils.o $(OBJ_DIR)/FileDataFactory.o $(OBJ_DIR)/FileDataSource.o \
+	$(OBJ_DIR)/FileDataSink.o $(OBJ_DIR)/StandardDataSource.o $(OBJ_DIR)/StandardDataSink.o \
+	$(OBJ_DIR)/StandardErrorDataSink.o
+
+transplanner: directories $(BIN_DIR)/transplanner
+
+$(BIN_DIR)/transplanner: $(TRANSPLANNER_OBJS)
+	$(CXX) -o $(BIN_DIR)/transplanner $(CXXFLAGS) $(TRANSPLANNER_OBJS) $(APPLDFLAGS)
+
+$(OBJ_DIR)/transplanner.o: $(SRC_DIR)/transplanner.cpp
+	$(CXX) -o $(OBJ_DIR)/transplanner.o -c $(CXXFLAGS) $(SRC_DIR)/transplanner.cpp
 
 runtests: $(BIN_DIR)/teststrutils $(BIN_DIR)/teststrdatasource $(BIN_DIR)/teststrdatasink $(BIN_DIR)/testfiledatass $(BIN_DIR)/testdsv $(BIN_DIR)/testxml $(BIN_DIR)/testkml $(BIN_DIR)/testcsvbs $(BIN_DIR)/testosm $(BIN_DIR)/testdpr $(BIN_DIR)/testcsvbsi $(BIN_DIR)/testtp $(BIN_DIR)/testtpcl #$(BIN_DIR)/speedtest 
 	-$(BIN_DIR)/teststrutils

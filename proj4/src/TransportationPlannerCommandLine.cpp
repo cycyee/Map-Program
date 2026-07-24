@@ -24,10 +24,48 @@ struct CTransportationPlannerCommandLine::SImplementation{
     std::shared_ptr<CDataFactory> Results;
     std::shared_ptr<CTransportationPlanner> Planner;
 
+    // Last computed path, retained so "save" and "print" can act on it
+    enum class ELastPath { None, Shortest, Fastest };
+    ELastPath DLastType = ELastPath::None;
+    std::vector<CTransportationPlanner::TNodeID> DLastShortestPath;
+    std::vector<CTransportationPlanner::TTripStep> DLastFastestPath;
+
     //assign to defined corresponding variable
     SImplementation(std::shared_ptr<CDataSource> cmdsrc, std::shared_ptr<CDataSink> outsink, std::shared_ptr<CDataSink> errsink, std::shared_ptr<CDataFactory> results, std::shared_ptr<CTransportationPlanner> planner)
     : CmdSrc(std::move(cmdsrc)), OutSink(std::move(outsink)), ErrSink(std::move(errsink)), Results(std::move(results)), Planner(std::move(planner)) {
     }
+
+    // Build a human-readable description of the last calculated path.
+    // Prefers the planner's turn-by-turn description; falls back to a step list.
+    std::string BuildPathText() {
+        std::ostringstream oss;
+        if (DLastType == ELastPath::Shortest) {
+            oss << "Shortest path (" << DLastShortestPath.size() << " nodes):\n";
+            for (auto id : DLastShortestPath) {
+                oss << "  node " << id << "\n";
+            }
+        }
+        else if (DLastType == ELastPath::Fastest) {
+            std::vector<std::string> desc;
+            if (Planner->GetPathDescription(DLastFastestPath, desc) && !desc.empty()) {
+                oss << "Fastest path:\n";
+                for (const auto &d : desc) {
+                    oss << "  " << d << "\n";
+                }
+            }
+            else {
+                oss << "Fastest path (" << DLastFastestPath.size() << " steps):\n";
+                for (const auto &step : DLastFastestPath) {
+                    const char *mode = "Walk";
+                    if (step.first == CTransportationPlanner::ETransportationMode::Bike) mode = "Bike";
+                    else if (step.first == CTransportationPlanner::ETransportationMode::Bus) mode = "Bus";
+                    oss << "  " << mode << " to node " << step.second << "\n";
+                }
+            }
+        }
+        return oss.str();
+    }
+
     //assign sources
     bool ProcessCommands() {
         //char vectors to be applied to write()
@@ -36,6 +74,7 @@ struct CTransportationPlannerCommandLine::SImplementation{
         char ch;
         std::string line;
         while(CmdSrc->Get(ch)) {//iterate through characters
+            if (ch == '\n') { line = ""; continue; }//newline separates commands; don't let it bleed into the next
             line += ch;
             if (line == "help") {
                 std::string str ="> "
@@ -74,10 +113,11 @@ struct CTransportationPlannerCommandLine::SImplementation{
                 }
                 OutSink->Write(outsinkV);
                 outsinkV.clear();//clear vect
+                line = "";//reset so the next command parses cleanly
             }
             if (line == "node") {
                 std::string nodeid;
-                while(CmdSrc->Get(ch)){//get remaining chars after "node" to see id
+                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//get remaining chars after "node" to see id
                     nodeid += ch;
                 }
                 if (nodeid == "") {//empty id
@@ -131,7 +171,7 @@ struct CTransportationPlannerCommandLine::SImplementation{
 
             if (line == "fastest") {//get src dest ids in a big string
                 std::string fastids;
-                while(CmdSrc->Get(ch)){//remainder of characters after "fastest"
+                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//remainder of characters after "fastest"
                     fastids += ch;
                 }
                 if(fastids == "") {
@@ -155,6 +195,8 @@ struct CTransportationPlannerCommandLine::SImplementation{
                     int IntNodeID1 = std::stoull(Fnodeid1);//stoull on nodeids
                     int IntNodeID2 = std::stoull(Fnodeid2);
                     double Time = Planner->FindFastestPath(IntNodeID1, IntNodeID2, path);//get time in hrs as double type
+                    DLastFastestPath = path;//store for save/print
+                    DLastType = ELastPath::Fastest;
                     int hours = static_cast<int>(Time);//truncate for hours
                     double remainder = Time - hours;//get remainder as fraction
                     remainder *= 60;//convert minutes
@@ -177,6 +219,7 @@ struct CTransportationPlannerCommandLine::SImplementation{
                     }
                     OutSink->Write(outsinkV);
                     outsinkV.clear();
+                    line = "";//reset so the next command parses cleanly
                 }
                 catch(const std::invalid_argument&) {//if something other than ids are passed
                     std::string err = "Invalid shortest parameter, see help.\n";
@@ -192,7 +235,7 @@ struct CTransportationPlannerCommandLine::SImplementation{
 
             if (line == "shortest") {//shortest distance
                 std::string shortids;
-                while(CmdSrc->Get(ch)){//remainder of str is the ids
+                while(CmdSrc->Get(ch)){ if(ch=='\n') break;//remainder of str is the ids
                     shortids += ch;
                 }
                 if (shortids == "") {
@@ -216,9 +259,11 @@ struct CTransportationPlannerCommandLine::SImplementation{
                     int IntNodeID2 = std::stoull(nodeid2);
                     double distance = Planner->FindShortestPath(IntNodeID1, IntNodeID2, path); //find distance
                     std::stringstream ss;
-                    ss << std::fixed << std::setprecision(1) << distance;//truncate 
+                    ss << std::fixed << std::setprecision(1) << distance;//truncate
                     std::string dist = ss.str();
-                    //std::string str = "> " "Shortest path is " + dist + " mi.\n" "> ";
+                    DLastShortestPath = path;//store for save/print
+                    DLastType = ELastPath::Shortest;
+                    std::string str = "> Shortest path is " + dist + " mi.\n> ";
                     for(size_t i = 0; i< str.size(); i++) {
                         outsinkV.push_back(str[i]);
                     }
@@ -237,10 +282,42 @@ struct CTransportationPlannerCommandLine::SImplementation{
                 }
             }
             if (line == "save") {
-                return true;
+                if (DLastType == ELastPath::None) {
+                    std::string err = "No path calculated yet, see help.\n";
+                    for (char c : err) errsinkV.push_back(c);
+                    ErrSink->Write(errsinkV);
+                    errsinkV.clear();
+                    line = "";
+                }
+                else {
+                    std::string out = BuildPathText();
+                    auto sink = Results ? Results->CreateSink("path.txt") : nullptr;
+                    if (sink) {
+                        std::vector<char> fileV(out.begin(), out.end());
+                        sink->Write(fileV);
+                    }
+                    std::string msg = "> Path saved to path.txt\n> ";
+                    for (char c : msg) outsinkV.push_back(c);
+                    OutSink->Write(outsinkV);
+                    outsinkV.clear();
+                    line = "";
+                }
             }
             if (line == "print") {
-                return true;
+                if (DLastType == ELastPath::None) {
+                    std::string err = "No path calculated yet, see help.\n";
+                    for (char c : err) errsinkV.push_back(c);
+                    ErrSink->Write(errsinkV);
+                    errsinkV.clear();
+                    line = "";
+                }
+                else {
+                    std::string out = "> " + BuildPathText() + "> ";
+                    for (char c : out) outsinkV.push_back(c);
+                    OutSink->Write(outsinkV);
+                    outsinkV.clear();
+                    line = "";
+                }
             }
         }
         return true;

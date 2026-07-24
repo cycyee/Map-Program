@@ -116,12 +116,17 @@ struct CXMLReader::SImplementation {
         // entity = DEntityQueue.front();
         // DEntityQueue.pop();
         // return true;
+        // Pull data until the queue has something or the source is exhausted.
+        // Each Read grabs a large block and we keep looping (refilling) until an
+        // entity is produced, so inputs larger than one block parse fully.
+        constexpr std::size_t ReadChunk = 1 << 20; // 1 MB per read
         while (DEntityQueue.empty() && !DDataSource->End()) {
             std::vector<char> DataBuffer;
-            if (DDataSource->Read(DataBuffer, 512)) {
-                XML_Parse(DXMLParser, DataBuffer.data(), DataBuffer.size(), DataBuffer.size() < 512);
+            if (DDataSource->Read(DataBuffer, ReadChunk) && !DataBuffer.empty()) {
+                XML_Parse(DXMLParser, DataBuffer.data(), DataBuffer.size(), DDataSource->End());
             } else {
                 XML_Parse(DXMLParser, nullptr, 0, true); // Signal end of parsing
+                break;
             }
         }
 

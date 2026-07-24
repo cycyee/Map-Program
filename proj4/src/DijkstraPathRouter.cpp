@@ -1,6 +1,8 @@
 #include "DijkstraPathRouter.h"
 #include<vector>
 #include<algorithm>
+#include<queue>
+#include<functional>
 #include <iostream>
 //algorithm sorting functions, using prebuilt min heap + pop_heap fn
 struct CDijkstraPathRouter::SImplementation {
@@ -44,65 +46,66 @@ struct CDijkstraPathRouter::SImplementation {
     }
 
     double FindShortestPath(TVertexID src, TVertexID dest, std::vector<TVertexID> &path) noexcept {
-        std::vector < TVertexID > PendingVertices;
-        std::vector < double > Distances(DVertices.size(), CPathRouter::NoPathExists);
-        std::vector < TVertexID  > Previous(DVertices.size(), CPathRouter::InvalidVertexID);
-        if(DVertices.size()== 0) {//empty map
-            std::cout<<"why no vertices lil bro"<<std::endl;
+        path.clear();
+        if(DVertices.empty() || src >= DVertices.size() || dest >= DVertices.size()) {
             return NoPathExists;
         }
-        //use a lambda to compare the actual distances instead of the id numbers
-        //want them sorted by distances, so that the top of the heap is the closest distance possible, and opposite swapping for the longest
-        auto VertexCompare = [&Distances](TVertexID left, TVertexID right) {return Distances[left] > Distances[right];}; //use inequality to populate the min-heap
 
-        Distances[src] = 0.0; //set distances = to 0
-        PendingVertices.push_back(src);//start with src
+        std::vector<double> Distances(DVertices.size(), CPathRouter::NoPathExists);
+        std::vector<TVertexID> Previous(DVertices.size(), CPathRouter::InvalidVertexID);
 
-        while(!PendingVertices.empty()) {
-            auto CurrentID = PendingVertices.front();
-            if (CurrentID > DVertices.size()) {
-                // Handle the out-of-bounds access here
-                std::cout<<"ERROR currentID out of range"<<std::endl;
-                return -1;
+        // Proper min-heap keyed by distance, with lazy deletion of stale entries.
+        // Using a priority_queue keeps this O((V + E) log V) instead of the
+        // previous O(V^2) make-heap-per-iteration, and avoids the inconsistent
+        // heap ordering that could produce cyclic Previous pointers.
+        using SQueueEntry = std::pair<double, TVertexID>;
+        std::priority_queue<SQueueEntry, std::vector<SQueueEntry>, std::greater<SQueueEntry>> Queue;
+
+        Distances[src] = 0.0;
+        Queue.push({0.0, src});
+
+        while(!Queue.empty()) {
+            auto [dist, current] = Queue.top();
+            Queue.pop();
+
+            if(current == dest) {
+                break;
             }
-            if(CurrentID == dest) {break;} //to skip if we are at the dest
-            //std::cout<<CurrentID<<std::endl;
-            std::pop_heap(PendingVertices.begin(), PendingVertices.end());
-            PendingVertices.pop_back(); //will get current id off the top of the heap, removes the shortest distance from pendingvertices
-            if(DVertices[CurrentID].DEdges.size() == 0){
-                return NoPathExists;
+            if(dist > Distances[current]) {
+                continue; // stale entry, a shorter path to current was already processed
             }
-            for(auto Edge : DVertices[CurrentID].DEdges) { //go through edges
-                auto EdgeWeight = Edge.first;
-                auto DestID = Edge.second;
-                if (CurrentID > DVertices.size() || DestID > DVertices.size()) {
-                    // Handle the out-of-bounds access here
-                    std::cout<<"ERROR DestID out of range"<<std::endl;
-                    return -1;
-                }
-                auto TotalDistance = Distances[CurrentID] + EdgeWeight;
-                if(TotalDistance < Distances[DestID]) { //check if distances are in the range
-                    if(CPathRouter::NoPathExists == Distances[DestID]) {
-                        PendingVertices.push_back(DestID);
-                    }
-                    Distances[DestID] = TotalDistance;
-                    Previous[DestID] = CurrentID;
+
+            for(const auto &edge : DVertices[current].DEdges) {
+                double weight = edge.first;
+                TVertexID next = edge.second;
+                double total = Distances[current] + weight;
+                if(total < Distances[next]) {
+                    Distances[next] = total;
+                    Previous[next] = current;
+                    Queue.push({total, next});
                 }
             }
-            //re heapify using vertexcompare to create min-heap
-            std::make_heap(PendingVertices.begin(), PendingVertices.end(), VertexCompare);
         }
+
         if(CPathRouter::NoPathExists == Distances[dest]) {
             return CPathRouter::NoPathExists;
         }
+
+        // Reconstruct the path from dest back to src, guarded against malformed
+        // Previous chains so a bad link can never spin into an unbounded loop.
         double PathDistance = Distances[dest];
-        path.clear();
-        path.push_back(dest);
-        do {//iterate and reassign previous/dest
-            dest = Previous[dest];
-            path.push_back(dest);
-        } while(dest != src);
-        std::reverse(path.begin(), path.end());//reverse the travelled path
+        TVertexID node = dest;
+        while(node != src) {
+            path.push_back(node);
+            TVertexID prev = Previous[node];
+            if(prev == CPathRouter::InvalidVertexID || path.size() > DVertices.size()) {
+                path.clear();
+                return CPathRouter::NoPathExists;
+            }
+            node = prev;
+        }
+        path.push_back(src);
+        std::reverse(path.begin(), path.end());
         return PathDistance;
     }
 };

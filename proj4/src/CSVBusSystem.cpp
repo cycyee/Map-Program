@@ -90,7 +90,7 @@ struct CCSVBusSystem::SImplementation {
             route->AddStopID(stopID);
             DRoute.push_back(route);
             DRouteIdToRoute[routeID] = route;
-            std::cout<<"stop id 1: "<<stopID<<std::endl;
+            //std::cout<<"stop id 1: "<<stopID<<std::endl;
         }
         while (routesrc->ReadRow(row)) {
             if (!row.empty()) {
@@ -100,13 +100,13 @@ struct CCSVBusSystem::SImplementation {
                 if (routeIter != DRouteIdToRoute.end()) {
                     // If the route exists, add in stop
                     route->AddStopID(stopID);
-                    std::cout<<"stop id: "<<stopID<<std::endl;
+                    //std::cout<<"stop id: "<<stopID<<std::endl;
                     //DStopID.push_back(stopID);
                 }
                 else {
                     // If the route does not exist, create new route and add stop in
                     auto newroute = std::make_shared<SRoute>(routeID);
-                    std::cout<<"stop id: "<<stopID<<std::endl;
+                    //std::cout<<"stop id: "<<stopID<<std::endl;
                     newroute->AddStopID(stopID);
                     DRoute.push_back(newroute);
                     DRouteIdToRoute[routeID] = newroute;

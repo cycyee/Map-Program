@@ -48,8 +48,8 @@ struct CDijkstraTransportationPlanner::SImplementation {
         
         for(size_t Index = 0; Index < DStreetMap->WayCount(); Index++) { //iterate through ways
             auto way = DStreetMap->WayByIndex(Index);
-            std::cout<<"Way ID: "<<way->ID()<<std::endl;
-            std::cout<<"nodes in way:"<<way->NodeCount()<<std::endl;
+            //std::cout<<"Way ID: "<<way->ID()<<std::endl;
+            //std::cout<<"nodes in way:"<<way->NodeCount()<<std::endl;
             bool Bikable = way->GetAttribute("bicycle") != "no"; //means that its not bikable/bikable 
             bool Bidirectional = way->GetAttribute("oneway") != "yes"; //decides if bidir flag is passed
             double speed = config->DefaultSpeedLimit();
@@ -65,11 +65,11 @@ struct CDijkstraTransportationPlanner::SImplementation {
                 auto nextNodeID = way->GetNodeID(NodeIndex + 1);
 
                 auto currentNode = DStreetMap->NodeByID(currentNodeID);
-                if(currentNode == nullptr) {std::cout<<"current node is null"<<std::endl; break;} //null checks to solve segfaulting
+                if(currentNode == nullptr) {break;} //null checks to solve segfaulting
                 //std::cout << "Current Node: " << currentNode->ID() << std::endl;      testing line
                 auto nextNode = DStreetMap->NodeByID(nextNodeID);
                 
-                if (nextNode == nullptr) {std::cout<<"Next Node null"<<std::endl; break;} //null check
+                if (nextNode == nullptr) {break;} //null check
                 //std::cout << "Next Node: " << nextNode->ID() << std::endl;
                 //std::cout << "---" << std::endl;          testing lines
                 
@@ -108,7 +108,7 @@ struct CDijkstraTransportationPlanner::SImplementation {
                 auto PreviousNode = DStreetMap->NodeByID(PreviousNodeID);
                 if(PreviousNode == nullptr) {std::cout<<"Previous Node null"<<std::endl; break;}
                 auto NextNode = DStreetMap->NodeByID(NextNodeID);
-                if(NextNode == nullptr) {std::cout<<"Next Node null"<<std::endl; break;}
+                if(NextNode == nullptr) {break;}
 
                 CPathRouter::TVertexID PreviousVertexID = DNodeToVertexID[PreviousNodeID];
                 CPathRouter::TVertexID NextVertexID = DNodeToVertexID[NextNodeID];
@@ -157,10 +157,10 @@ struct CDijkstraTransportationPlanner::SImplementation {
                 auto currentStopID = route->GetStopID(routeIndex);
                 auto nextStopID = route->GetStopID(routeIndex + 1);
                 auto currentStop = DBusSystem->StopByID(currentStopID);
-                if(currentStop == nullptr) {std::cout<<" current stop is null"<<std::endl; break;} //null check
+                if(currentStop == nullptr) {break;} //null check
                 //std::cout << "Current Stop: " << currentStop->NodeID() << std::endl;
                 auto nextStop = DBusSystem->StopByID(nextStopID);
-                if (nextStop == nullptr) {std::cout<<"next stop is null"<<std::endl; break;} //null check
+                if (nextStop == nullptr) {break;} //null check
                 //std::cout << "Next Stop: " << nextStop->NodeID() << std::endl;
 
                 auto currentVertexID = DNodeToVertexID[currentStop->NodeID()];//get vertex ids
@@ -189,7 +189,7 @@ struct CDijkstraTransportationPlanner::SImplementation {
                 auto prevstop = DBusSystem->StopByID(previousStopID);
                 if(prevstop == nullptr) {std::cout<<"prev stop is null"<<std::endl; break;}
                 auto nextstop = DBusSystem->StopByID(nextStopID);
-                if(nextstop == nullptr) {std::cout<<"next stop is null"<<std::endl; break;}
+                if(nextstop == nullptr) {break;}
                 CPathRouter::TVertexID PreviousVertexID = DNodeToVertexID[previousStopID];
                 CPathRouter::TVertexID NextVertexID = DNodeToVertexID[nextStopID];
 
